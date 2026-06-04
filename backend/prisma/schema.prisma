@@ -1,0 +1,169 @@
+// ──────────────────────────────────────────────
+// ReconcileFlow — Prisma Schema
+// All money stored as BigInt (smallest currency unit = paise for INR)
+// ──────────────────────────────────────────────
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ── Enums ──────────────────────────────────────
+
+enum OrderStatus {
+  PENDING
+  PAID
+  FAILED
+  REFUNDED
+}
+
+enum GatewayTxnStatus {
+  RECEIVED
+  PROCESSED
+  FAILED
+  DUPLICATE
+}
+
+enum MatchStatus {
+  MATCHED
+  UNMATCHED
+  PARTIAL
+  DISPUTED
+  RESOLVED
+}
+
+enum RunStatus {
+  PENDING
+  RUNNING
+  COMPLETED
+  FAILED
+}
+
+// ── Models ─────────────────────────────────────
+
+model User {
+  id        String   @id @default(uuid())
+  email     String   @unique
+  password  String
+  name      String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("users")
+}
+
+model Order {
+  id          String      @id @default(uuid())
+  externalRef String      @unique
+  amountMinor BigInt
+  currency    String      @default("INR")
+  status      OrderStatus @default(PENDING)
+  customerEmail String?
+  description   String?
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+
+  gatewayTxns GatewayTransaction[]
+  matches     ReconciliationMatch[]
+
+  @@index([status])
+  @@index([createdAt])
+  @@map("orders")
+}
+
+model GatewayTransaction {
+  id             String           @id @default(uuid())
+  orderId        String?
+  gatewayEventId String           @unique // Stripe event ID — DB-level idempotency
+  gatewayRef     String           // Stripe charge/payment_intent ID
+  amountMinor    BigInt
+  feeMinor       BigInt           @default(0)
+  status         GatewayTxnStatus @default(RECEIVED)
+  rawPayload     Json             // full webhook payload for audit
+  receivedAt     DateTime         @default(now())
+
+  order Order? @relation(fields: [orderId], references: [id])
+
+  @@index([orderId])
+  @@index([gatewayRef])
+  @@index([receivedAt])
+  @@map("gateway_transactions")
+}
+
+model BankSettlement {
+  id         String   @id @default(uuid())
+  utr        String   @unique // bank reference — guaranteed unique by issuer
+  rrn        String?
+  amountMinor BigInt
+  settledAt  DateTime
+  bankName   String?
+  sourceFile String   // e.g. settlements/2026-05-17.csv
+  ingestedAt DateTime @default(now())
+
+  @@index([settledAt])
+  @@index([sourceFile])
+  @@map("bank_settlements")
+}
+
+model ReconciliationRun {
+  id             String    @id @default(uuid())
+  source         String    // 'stripe' | 'csv' | 'manual'
+  status         RunStatus @default(PENDING)
+  totalProcessed Int       @default(0)
+  totalMatched   Int       @default(0)
+  totalUnmatched Int       @default(0)
+  totalDisputed  Int       @default(0)
+  totalPartial   Int       @default(0)
+  startedAt      DateTime  @default(now())
+  completedAt    DateTime?
+  errorMessage   String?
+
+  matches ReconciliationMatch[]
+
+  @@index([status])
+  @@index([startedAt])
+  @@map("reconciliation_runs")
+}
+
+model ReconciliationMatch {
+  id               String      @id @default(uuid())
+  orderId          String?
+  gatewayTxnId     String?
+  bankSettlementId String?
+  status           MatchStatus
+  discrepancyType  String?     // FEE_MISMATCH | AMOUNT_MISMATCH | MISSING_GATEWAY | MISSING_SETTLEMENT | TIME_WINDOW_MATCH
+  amountDeltaMinor BigInt?
+  confidenceScore  Int?        // 0-100 indicating match quality
+  resolvedBy       String?     // userId who manually resolved
+  resolvedReason   String?
+  reconciledAt     DateTime    @default(now())
+  runId            String
+
+  run   ReconciliationRun @relation(fields: [runId], references: [id])
+  order Order?            @relation(fields: [orderId], references: [id])
+
+  @@index([runId])
+  @@index([status])
+  @@index([orderId])
+  @@map("reconciliation_matches")
+}
+
+model AuditLog {
+  id         String   @id @default(uuid())
+  actor      String   // 'system' or userId
+  action     String   // 'MATCH_CREATED', 'MANUAL_RESOLVE', 'DLQ_DISMISSED', etc.
+  entityType String   // 'ReconciliationMatch', 'Order', etc.
+  entityId   String
+  before     Json?
+  after      Json
+  reason     String?
+  timestamp  DateTime @default(now())
+
+  @@index([entityType, entityId])
+  @@index([timestamp])
+  @@map("audit_log")
+}

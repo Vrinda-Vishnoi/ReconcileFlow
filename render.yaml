@@ -1,0 +1,44 @@
+services:
+  - type: web
+    name: reconcileflow-backend
+    runtime: node
+    rootDir: backend
+    plan: free
+    region: singapore
+    healthCheckPath: /api/health
+    buildCommand: npm install && npm run db:generate && npm run build
+    startCommand: npm run db:push && npm start
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 3000
+      - key: DATABASE_URL
+        fromDatabase:
+          name: reconcileflow-db
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          type: keyvalue
+          name: reconcileflow-redis
+          property: connectionString
+      - key: JWT_SECRET
+        generateValue: true
+      - key: STRIPE_SECRET_KEY
+        value: sk_test_placeholder
+      - key: STRIPE_WEBHOOK_SECRET
+        value: whsec_placeholder
+      - key: CORS_ORIGIN
+        value: https://your-vercel-app-url.vercel.app
+
+  - type: keyvalue
+    name: reconcileflow-redis
+    plan: free
+    region: singapore
+    ipAllowList: []
+
+databases:
+  - name: reconcileflow-db
+    plan: free
+    region: singapore
+    postgresMajorVersion: 16
