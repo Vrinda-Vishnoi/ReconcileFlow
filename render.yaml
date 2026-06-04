@@ -6,7 +6,7 @@ services:
     plan: free
     region: singapore
     healthCheckPath: /api/health
-    buildCommand: npm install && npm run db:generate && npm run build
+    buildCommand: npm install --include=dev && npm run db:generate && npm run build
     startCommand: npm run db:push && npm start
     envVars:
       - key: NODE_ENV
